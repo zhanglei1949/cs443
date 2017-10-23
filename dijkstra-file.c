@@ -62,7 +62,7 @@ void read_matrix_from_file(int loc_mat[], int n, int loc_n,
 void Print_local_matrix(int loc_mat[], int n, int loc_n, int my_rank);
 void Print_matrix(int loc_mat[], int n, int loc_n,
       MPI_Datatype blk_col_mpi_t, int my_rank, MPI_Comm comm);
-void Dijkstra(int loc_mat [], int loc_dist[], int loc_known[], int loc_pred[], int my_min[], int glb_min[],
+double Dijkstra(int loc_mat [], int loc_dist[], int loc_known[], int loc_pred[], int my_min[], int glb_min[],
         int n, int loc_n, int my_rank, MPI_Comm comm);
 void Find_min_dist(int loc_dist[], int loc_known[], int my_min[], int loc_n, int my_rank);
 void Print_paths(int pred[], int n);
@@ -74,10 +74,10 @@ int main(int argc, char* argv[]) {
    int my_min[2];
    int *glb_dist, *glb_pred;
    int glb_min[2];
-   double loc_start, loc_end, loc_elapsed, glb_elapsed;
-
+   double loc_start, loc_end, loc_elapsed;
+   double all_start, all_end, all_elapsed;
    int n, loc_n, p, my_rank;
-   FILE *file_p;
+   //FILE *file_p;
    MPI_Comm comm;
    MPI_Datatype blk_col_mpi_t;
 
@@ -87,9 +87,11 @@ int main(int argc, char* argv[]) {
    MPI_Comm_size(comm, &p);
    MPI_Comm_rank(comm, &my_rank);
 
+   //count the total time
+   if (my_rank == 0) all_start = MPI_Wtime();
    //n = Read_n(my_rank, comm);
    n = read_n_from_file(my_rank, comm, argv[1]);
-   printf("%d\n", n);
+   //printf("%d\n", n);
    loc_n = n/p;
    loc_mat = malloc(n*loc_n*sizeof(int));
    loc_known = malloc(loc_n*sizeof(int));
@@ -102,19 +104,20 @@ int main(int argc, char* argv[]) {
    //Read_matrix(loc_mat, n, loc_n, blk_col_mpi_t, my_rank, comm);
    read_matrix_from_file(loc_mat, n, loc_n, blk_col_mpi_t, my_rank, comm, argv[1]);
    //Print_local_matrix(loc_mat, n, loc_n, my_rank);
-   Print_matrix(loc_mat, n, loc_n, blk_col_mpi_t, my_rank, comm);
+   //Print_matrix(loc_mat, n, loc_n, blk_col_mpi_t, my_rank, comm);
 
    MPI_Barrier(comm);
-   loc_start = MPI_Wtime();
+   if (my_rank == 0) loc_start = MPI_Wtime();
 //*****************************************************************************
-   Dijkstra(loc_mat, loc_dist, loc_known, loc_pred, my_min, glb_min, n,loc_n,my_rank, comm);
+   double allReduce_time = Dijkstra(loc_mat, loc_dist, loc_known, loc_pred, my_min, glb_min, n,loc_n,my_rank, comm);
 //*****************************************************************************
-   loc_end = MPI_Wtime();
-   loc_elapsed = loc_end - loc_start;
-   MPI_Reduce(&loc_elapsed, &glb_elapsed, 1, MPI_DOUBLE, MPI_MAX, 0, comm);
+   if (my_rank == 0){
+     loc_end = MPI_Wtime();
+     loc_elapsed = loc_end - loc_start;
+   }
+   //MPI_Reduce(&loc_elapsed, &glb_elapsed, 1, MPI_DOUBLE, MPI_MAX, 0, comm);
 
-   if(my_rank==0)
-      printf("Elapsed time is %e seconds\n",glb_elapsed);
+   if (my_rank == 0) all_end = MPI_Wtime();
    //Recording results
    if(my_rank==0){
       glb_dist = malloc(n*sizeof(int));
@@ -128,7 +131,16 @@ int main(int argc, char* argv[]) {
     }
    free(loc_mat); free(loc_dist);free(loc_pred); free(loc_known);
    if (my_rank==0){
-      //free(glb_dist); free(glb_pred);
+      free(glb_dist); free(glb_pred);
+      all_elapsed  = all_end - all_start;
+      printf("Elapsed time is %f seconds\n",loc_elapsed);
+      printf("allReduce_time %f\n", allReduce_time);
+      printf("global_time %f\n", all_elapsed);
+
+
+      FILE *file_out = fopen("result.out.new","a");
+      fprintf(file_out, "%s %d %f %f %f\n", argv[1], p, loc_elapsed, allReduce_time, all_elapsed);
+      fclose(file_out);
     }
    /* When you're done with the MPI_Datatype, free it */
    MPI_Type_free(&blk_col_mpi_t);
@@ -151,10 +163,11 @@ void Find_min_dist(int loc_dist[], int loc_known[], int my_min[], int loc_n, int
    my_min[0] = loc_min;
    my_min[1] = loc_n*my_rank + loc_u;
 }
-void Dijkstra(int loc_mat [], int loc_dist[], int loc_known[], int loc_pred[], int my_min[], int glb_min[],
+double Dijkstra(int loc_mat [], int loc_dist[], int loc_known[], int loc_pred[], int my_min[], int glb_min[],
         int n, int loc_n, int my_rank, MPI_Comm comm)
 {
     //*Initialization
+    double loc_start, loc_end;
     for(int i = 0; i < loc_n; i++) {
       loc_dist[i] = loc_mat[0*loc_n+i];
       loc_pred[i] = 0;
@@ -164,12 +177,14 @@ void Dijkstra(int loc_mat [], int loc_dist[], int loc_known[], int loc_pred[], i
     for (int i = 1; i < n; ++i){
       //iterate for n-1 times
       Find_min_dist(loc_dist, loc_known, my_min, loc_n, my_rank);
+      loc_start = MPI_Wtime();
       MPI_Allreduce(my_min,glb_min,1,MPI_2INT,MPI_MINLOC,comm);
+      loc_end = MPI_Wtime();
       //we have to update known[], but we don't know which part it belongs
       if (my_rank == glb_min[1]/loc_n){
           loc_known[glb_min[1]%loc_n] = 1;
       }
-      if (my_rank == 0) printf("Round %d: choose vertex %d\n",i,glb_min[1]);
+      //if (my_rank == 0) printf("Round %d: choose vertex %d\n",i,glb_min[1]);
       //now update dist and known;
       for (int i = 0; i < loc_n; ++i){
           if (loc_known[i]) continue;
@@ -180,7 +195,7 @@ void Dijkstra(int loc_mat [], int loc_dist[], int loc_known[], int loc_pred[], i
           }
       }
     }
-
+    return loc_end - loc_start;
 }
 void Print_dists(int dist[], int n) {
    int v;
@@ -329,16 +344,17 @@ void read_matrix_from_file(int loc_mat[], int n, int loc_n,
             //scanf("%d", &mat[i*n + j]);
 
             fscanf(file_q, "%d ", &mat[i*n + j]);
-            printf("%d %d %d\n", i, j,mat[i*n + j]);
+            //printf("%d %d %d\n", i, j,mat[i*n + j]);
           }
         }
-
+        /*
         for (int i = 0; i < n; ++i){
           for (int j = 0; j < n; ++j){
             printf("%d ",mat[i*n + j]);
           }
           printf("\n");
         }
+        */
         fclose(file_q);
    }
    MPI_Scatter(mat, 1, blk_col_mpi_t,
