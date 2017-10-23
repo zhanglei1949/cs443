@@ -138,7 +138,7 @@ int main(int argc, char* argv[]) {
       printf("global_time %f\n", all_elapsed);
 
 
-      FILE *file_out = fopen("result.out.new","a");
+      FILE *file_out = fopen("result.out.timesum","a");
       fprintf(file_out, "%s %d %f %f %f\n", argv[1], p, loc_elapsed, allReduce_time, all_elapsed);
       fclose(file_out);
     }
@@ -166,6 +166,7 @@ void Find_min_dist(int loc_dist[], int loc_known[], int my_min[], int loc_n, int
 double Dijkstra(int loc_mat [], int loc_dist[], int loc_known[], int loc_pred[], int my_min[], int glb_min[],
         int n, int loc_n, int my_rank, MPI_Comm comm)
 {
+    double time_sum = 0;
     //*Initialization
     double loc_start, loc_end;
     for(int i = 0; i < loc_n; i++) {
@@ -180,6 +181,7 @@ double Dijkstra(int loc_mat [], int loc_dist[], int loc_known[], int loc_pred[],
       loc_start = MPI_Wtime();
       MPI_Allreduce(my_min,glb_min,1,MPI_2INT,MPI_MINLOC,comm);
       loc_end = MPI_Wtime();
+      time_sum += loc_end - loc_start;
       //we have to update known[], but we don't know which part it belongs
       if (my_rank == glb_min[1]/loc_n){
           loc_known[glb_min[1]%loc_n] = 1;
@@ -195,7 +197,7 @@ double Dijkstra(int loc_mat [], int loc_dist[], int loc_known[], int loc_pred[],
           }
       }
     }
-    return loc_end - loc_start;
+    return time_sum;
 }
 void Print_dists(int dist[], int n) {
    int v;
